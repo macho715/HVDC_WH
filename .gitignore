@@ -129,7 +129,8 @@ dmypy.json
 .pyre/
 
 # Project specific
-outputs/
+outputs/*
+!outputs/업로드_스타일_공급사별_Case집계_*.xlsx
 data/
 *.xlsx
 *.xls
