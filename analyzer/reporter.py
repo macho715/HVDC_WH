@@ -47,12 +47,13 @@ class ExcelReporter:
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             for sheet_name, df in self.reports.items():
                 if df is not None and not df.empty:
+                    # MultiIndex 컬럼 처리
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df = df.copy()
+                        df.columns = ['_'.join([str(x) for x in col if str(x) != '']) for col in df.columns.values]
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # 워크시트 가져오기 및 스타일링
                     worksheet = writer.sheets[sheet_name]
                     self._apply_sheet_styling(worksheet, df)
-                    
                     print(f"   ✅ Sheet '{sheet_name}' created with {len(df)} rows")
                 else:
                     print(f"   ⚠️ Sheet '{sheet_name}' skipped (empty data)")

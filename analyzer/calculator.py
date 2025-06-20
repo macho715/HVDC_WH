@@ -1,7 +1,6 @@
 # ==============================================================================
 # 📝 파일: analyzer/calculator.py
-# ℹ️ 설명: 공급사별 분석, 통합 창고 현황, 창고-현장 이동 흐름 분석 기능을
-#          모두 포함하는 통합 계산기 클래스입니다.
+# ℹ️ 설명: MOSB를 주요 리포트에서 제외하는 로직이 적용된 통합 계산기 클래스.
 # ==============================================================================
 import pandas as pd
 from datetime import datetime
@@ -29,65 +28,60 @@ class AnalysisCalculator:
         all_reports = {}
         for supplier, df in self.movement_data.items():
             if df is None or df.empty:
-                print(f"   - ⚠️ No data for {supplier}, skipping.")
                 continue
-            
-            print(f"   - Processing: {supplier}")
+            print(f"   - Processing for supplier-specific sheets: {supplier}")
             warehouse_cols = self.config['WAREHOUSE_COLS_MAP'].get(supplier, [])
-            
             warehouse_df, site_df = self._process_supplier(df, warehouse_cols)
-            
             if not warehouse_df.empty:
                 all_reports[f"{supplier}_창고"] = warehouse_df
             if not site_df.empty:
                 all_reports[f"{supplier}_현장"] = site_df
-        
         return all_reports
 
-    # --- 기능 2: 통합 창고 현황 ---
+    # --- 기능 2: 통합 창고 현황 (MOSB 제외) ---
     def generate_consolidated_warehouse_status(self, supplier_reports: dict) -> pd.DataFrame:
         """
         각 공급사별 창고 집계 리포트를 통합하여,
         전체 창고의 월별 입고/출고/재고 현황을 생성합니다.
+        (MOSB는 집계에서 제외)
         """
-        print("   - Generating Consolidated Warehouse Status...")
-        
-        warehouse_reports = []
-        for sheet_name, df in supplier_reports.items():
-            if '_창고' in sheet_name and not df.empty:
-                # TOTAL 행 제거 후 추가
-                df_clean = df[df['월'] != 'TOTAL'].copy()
-                warehouse_reports.append(df_clean)
-
-        if not warehouse_reports:
-            print("   - ⚠️ No supplier-specific warehouse reports found for consolidation.")
+        print("   - Generating Consolidated Warehouse Status (excluding MOSB)...")
+        warehouse_dfs = [report for name, report in supplier_reports.items() if name.endswith('_창고') and not report.empty]
+        if not warehouse_dfs:
             return pd.DataFrame()
             
-        consolidated_df = pd.concat(warehouse_reports, ignore_index=True)
-        final_summary = consolidated_df.groupby('월').sum().reset_index().sort_values('월')
+        consolidated = pd.concat([df[df['월'] != 'TOTAL'] for df in warehouse_dfs], ignore_index=True)
+        summary = consolidated.groupby('월').sum().reset_index().sort_values('월')
 
-        if not final_summary.empty:
-            total_row = {'월': 'TOTAL'}
-            for col in final_summary.columns:
-                if col == '월': continue
-                total_row[col] = final_summary[col].iloc[-1] if '재고' in col else final_summary[col].sum()
-            final_summary = pd.concat([final_summary, pd.DataFrame([total_row])], ignore_index=True)
+        if summary.empty:
+            return pd.DataFrame()
 
-        # 컬럼 순서 재정렬
-        all_warehouse_names = sorted(list(set(col.split('_')[0] for col in final_summary.columns if '_' in col)))
-        sorted_cols = ['월'] + [f"{wh_name}{suf}" for wh_name in all_warehouse_names for suf in ['_입고', '_출고', '_재고'] if f"{wh_name}{suf}" in final_summary.columns]
+        total_row = {'월': 'TOTAL'}
+        for col in summary.columns[1:]:
+            total_row[col] = summary[col].iloc[-1] if '재고' in col else summary[col].sum()
+        summary = pd.concat([summary, pd.DataFrame([total_row])], ignore_index=True)
+        
+        # 컬럼 순서 재정렬 및 MOSB 제외
+        all_wh_names = sorted(list(set(c.split('_')[0] for c in summary.columns if '_' in c)))
+        
+        # ✨ MOSB를 최종 집계에서 제외하는 로직
+        if 'MOSB' in all_wh_names:
+            all_wh_names.remove('MOSB')
+            
+        sorted_cols = ['월'] + [f"{wh}{suf}" for wh in all_wh_names for suf in ['_입고', '_출고', '_재고'] if f"{wh}{suf}" in summary.columns]
         
         print("   ✅ Consolidated Warehouse Status created.")
-        return final_summary[sorted_cols]
+        return summary[sorted_cols]
 
-    # --- 기능 3: 창고-현장 이동 흐름 분석 ---
+    # --- 기능 3: 창고-현장 이동 흐름 분석 (MOSB 제외) ---
     def generate_warehouse_to_site_flow(self) -> pd.DataFrame:
         """
-        '어떤 창고'에서 '어떤 현장'으로 화물이 이동했는지 추적하여 매트릭스를 생성합니다.
+        '어떤 창고'에서 '어떤 현장'으로 화물이 이동했는지 추적하여
+        입고/출고/재고 형식의 매트릭스를 생성합니다.
+        (MOSB는 출발지에서 제외)
         """
-        print("   - Generating Warehouse-to-Site Flow Analysis...")
+        print("   - Generating Warehouse-to-Site Flow Analysis (excluding MOSB as origin)...")
         all_transitions = []
-
         for supplier, df in self.movement_data.items():
             if df is None or df.empty: continue
             
@@ -95,17 +89,13 @@ class AnalysisCalculator:
             site_cols = self.config['SITE_COLS']
             
             for _, row in df.iterrows():
-                events = []
-                for loc in warehouse_cols + site_cols:
-                    if loc in df.columns and pd.notna(row[loc]):
-                        events.append({'date': row[loc], 'location': loc})
-                
+                events = [{'date': row[loc], 'location': loc} for loc in warehouse_cols + site_cols if loc in df.columns and pd.notna(row[loc])]
                 events.sort(key=lambda x: x['date'])
                 
                 for i in range(1, len(events)):
                     if events[i-1]['location'] in warehouse_cols and events[i]['location'] in site_cols:
                         all_transitions.append({
-                            'origin_warehouse': events[i-1]['location'], 
+                            'origin_warehouse': events[i-1]['location'],
                             'destination_site': events[i]['location']
                         })
         
@@ -113,12 +103,23 @@ class AnalysisCalculator:
             print("   - ⚠️ No warehouse-to-site transitions found.")
             return pd.DataFrame()
 
-        # 피벗 테이블 생성
-        transitions_df = pd.DataFrame(all_transitions)
-        pivot_df = transitions_df.groupby(['origin_warehouse', 'destination_site']).size().unstack(fill_value=0)
+        pivot_df = pd.DataFrame(all_transitions).groupby(['origin_warehouse', 'destination_site']).size().unstack(fill_value=0)
         
+        # ✨ MOSB를 출발지(index)에서 제외하는 로직
+        if 'MOSB' in pivot_df.index:
+            pivot_df = pivot_df.drop('MOSB')
+            
+        sites = self.config.get('SITE_COLS', [])
+        final_cols = pd.MultiIndex.from_product([sites, ['입고', '출고', '재고']], names=['SITE', '구분'])
+        result_df = pd.DataFrame(index=pivot_df.index, columns=final_cols).fillna(0).astype(int)
+
+        for site in sites:
+            if site in pivot_df.columns:
+                result_df[(site, '입고')] = pivot_df[site]
+        
+        result_df.index.name = '구분'
         print("   ✅ Warehouse-to-Site Flow sheet created.")
-        return pivot_df.reset_index()
+        return result_df.reset_index()
 
     # --- Helper Functions ---
     def _process_supplier(self, df: pd.DataFrame, warehouse_cols: list) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -126,7 +127,7 @@ class AnalysisCalculator:
         단일 공급사 데이터에 대해 Case 단위 입출고/재고/누적입고를 계산합니다.
         """
         site_cols = self.config['SITE_COLS']
-        target_month = self.config.get('TARGET_MONTH', '2025-06')
+        target_month = self.config.get('TARGET_MONTH', pd.Timestamp.now().strftime('%Y-%m'))
 
         # 날짜 컬럼 변환
         for col in warehouse_cols + site_cols:
@@ -135,9 +136,7 @@ class AnalysisCalculator:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
         # 월 목록 생성
-        all_months = set()
-        for col in warehouse_cols + site_cols:
-            all_months.update(df[col].dropna().dt.to_period('M'))
+        all_months = set(pd.to_datetime(df[warehouse_cols + site_cols].stack(), errors='coerce').dropna().dt.to_period('M'))
         month_strs = sorted([str(m) for m in all_months if str(m) <= target_month])
         if not month_strs: return pd.DataFrame(), pd.DataFrame()
 
