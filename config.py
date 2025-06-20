@@ -1,141 +1,203 @@
 # /config.py
-"""
-Configuration Module
 
-This module contains all configuration settings for the warehouse analysis system.
-It serves as the single source of truth for all system parameters and mappings.
-"""
-
+# 1. ONTOLOGY MAPPING: Standardizes column names across different data sources
 # =============================================================================
-# 1. ONTOLOGY MAP: Maps messy real-world column names to clean, standard format
-# =============================================================================
-# This is the "brain" that allows the system to understand different file formats
-# by mapping various column names to standardized internal names.
+# This mapping follows the inbound_mapping_schema_v1.2 for SAP FI → Knowledge Graph ETL
 
 ONTOLOGY_MAP = {
-    # Standard Name : [List of possible aliases in source files]
-    'case_no':      ['Case No.', 'MR#', 'SCT SHIP NO.', 'Carton ID', 'Package No'],
-    'quantity':     ["Q'TY", 'QTY', 'Quantity', 'QTY SHIPPED', 'Received', 'on hand', 'onhand'],
-    'location':     ['Location', 'LOC', 'ActualLocation', 'Warehouse'],
-    'description':  ['DESCRIPTION', 'Desc.'],
-    'vendor':       ['VENDOR', 'Supplier', 'SHIPMENT ID'],
-    'unit':         ['Unit', 'UOM'],
-    'length':       ['L(m)', 'l(m)', 'L(cm)', 'Length'],
-    'width':        ['W(m)', 'w(m)', 'W(cm)', 'Width'],
-    'height':       ['H(m)', 'h(m)', 'H(cm)', 'Height'],
-    'gross_weight': ['G.W(kg)', 'gw(kg)', 'Gross Weight', 'GW'],
-    'hs_code':      ['HS CODE', 'Tariff Code'],
-    'incoterm':     ['INCOTERM'],
-    'oog_flag':     ['OOG'],
-    'package_type': ['PKG TYPE', 'PackageType'],
+    # === CORE FIELDS (Required) ===
+    'case_no': {
+        'patterns': ['case no', 'case_no', 'mr#', 'sct ship no', 'carton id', 'case number', 'case_id', 'No.', 'No,', 'Case No.', 'Case No', 'No'],
+        'required': True,
+        'ontology_tag': 'kg:InventoryUnit',
+        'shacl_rule': 'sct:UniqueKey',
+        'transform': 'unique_key_check'
+    },
+    'quantity': {
+        'patterns': ["q'ty", 'qty', 'quantity', 'received', 'received qty', 'received quantity'],
+        'required': True,
+        'ontology_tag': 'kg:ReceivedQuantity',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'to_numeric_with_ea_correction'
+    },
+    'arrival_date': {
+        'patterns': ['inbound date', 'arrival date', 'last move', 'arrival', 'inbound'],
+        'required': True,
+        'ontology_tag': 'kg:InboundDate',
+        'shacl_rule': 'sct:Date',
+        'transform': 'to_period_month'
+    },
+    
+    # === STORAGE & LOCATION FIELDS ===
+    'storage_type': {
+        'patterns': ['storage type', 'storage condition', 'storage'],
+        'required': False,
+        'ontology_tag': 'kg:StorageCondition',
+        'shacl_rule': 'sct:EnumStorage',
+        'transform': 'map_storage_type'
+    },
+    'warehouse': {
+        'patterns': ['warehouse', 'wh', 'dsv', 'al markaz', 'zener', 'location'],
+        'required': False,
+        'ontology_tag': 'kg:WarehouseName',
+        'shacl_rule': 'sct:WHRef',
+        'transform': 'join_wh_master'
+    },
+    
+    # === VENDOR & SUPPLIER FIELDS ===
+    'vendor': {
+        'patterns': ['vendor', 'supplier', 'supplier name', 'vendor name'],
+        'required': False,
+        'ontology_tag': 'kg:Supplier',
+        'shacl_rule': 'sct:VendorRef',
+        'transform': 'classify_vendor'
+    },
+    
+    # === DIMENSIONS & WEIGHT FIELDS ===
+    'sqm': {
+        'patterns': ['sqm', 'area', 'square meter', 'square meters'],
+        'required': False,
+        'ontology_tag': 'kg:Area',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'calculate_from_dimensions'
+    },
+    'cbm': {
+        'patterns': ['cbm', 'volume', 'cubic meter', 'cubic meters'],
+        'required': False,
+        'ontology_tag': 'kg:Volume',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'calculate_from_dimensions'
+    },
+    'gw': {
+        'patterns': ['g.w', 'g.w(kg)', 'gross weight', 'weight', 'kg'],
+        'required': False,
+        'ontology_tag': 'kg:GrossWeight',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'estimate_from_cbm_if_missing'
+    },
+    
+    # === NEW FIELDS (v1.2) ===
+    'hs_code': {
+        'patterns': ['hs code', 'hs_code', 'tariff code', 'tariff', 'hs'],
+        'required': False,
+        'ontology_tag': 'kg:TariffCode',
+        'shacl_rule': 'sct:HS6',
+        'transform': 'validate_hs_code'
+    },
+    'incoterm': {
+        'patterns': ['incoterm', 'incoterms', 'trade term', 'delivery term'],
+        'required': False,
+        'ontology_tag': 'kg:Incoterm',
+        'shacl_rule': 'sct:Incoterm',
+        'transform': 'normalize_incoterm'
+    },
+    'oog_flag': {
+        'patterns': ['oog', 'oversize', 'over dimension', 'out of gauge'],
+        'required': False,
+        'ontology_tag': 'kg:OversizeFlag',
+        'shacl_rule': 'sct:Boolean',
+        'transform': 'calculate_oog_flag'
+    },
+    'package_type': {
+        'patterns': ['pkg type', 'package type', 'packaging', 'package'],
+        'required': False,
+        'ontology_tag': 'kg:PackageType',
+        'shacl_rule': 'sct:EnumPkg',
+        'transform': 'classify_package_type'
+    },
+    
+    # === DIMENSION FIELDS (for calculations) ===
+    'length': {
+        'patterns': ['l(cm)', 'length', 'l', 'length(cm)', 'l_cm'],
+        'required': False,
+        'ontology_tag': 'kg:Length',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'cm_to_m'
+    },
+    'width': {
+        'patterns': ['w(cm)', 'width', 'w', 'width(cm)', 'w_cm'],
+        'required': False,
+        'ontology_tag': 'kg:Width',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'cm_to_m'
+    },
+    'height': {
+        'patterns': ['h(cm)', 'height', 'h', 'height(cm)', 'h_cm'],
+        'required': False,
+        'ontology_tag': 'kg:Height',
+        'shacl_rule': 'sct:PositiveNumber',
+        'transform': 'cm_to_m'
+    },
+    
+    # === LEGACY FIELDS (for backward compatibility) ===
+    'description': {
+        'patterns': ['description', 'desc', 'item description', 'product description'],
+        'required': False,
+        'ontology_tag': 'kg:Description',
+        'shacl_rule': 'sct:Text',
+        'transform': 'clean_text'
+    },
+    'unit': {
+        'patterns': ['unit', 'uom', 'unit of measure'],
+        'required': False,
+        'ontology_tag': 'kg:UnitOfMeasure',
+        'shacl_rule': 'sct:EnumUnit',
+        'transform': 'normalize_unit'
+    }
 }
 
-# =============================================================================
 # 2. FILE CONFIGURATION: Defines the location and type of each data file
 # =============================================================================
 # Each entry defines a data file with its path, sheet name, and type.
 
 FILE_CONFIG = {
+    'DSV_ONHAND': {
+        'path': 'analyzer/data/HVDC Stock OnHand Report.xlsx',
+        'sheet_name': 'Case List',
+        'type': 'onhand'  # 실제 재고 기준 파일
+    },
     'STOCK_ONHAND': {
-        'path': 'data/HVDC Stock OnHand Report.xlsx',
+        'path': 'analyzer/data/HVDC Stock OnHand Report.xlsx',
         'sheet_name': 'Case List',
         'type': 'onhand'  # This file is the source of truth for current stock
     },
     'HITACHI': {
-        'path': 'data/HVDC WAREHOUSE_HITACHI(HE).xlsx',
+        'path': 'analyzer/data/HVDC WAREHOUSE_HITACHI(HE).xlsx',
         'sheet_name': 'Case List',  # Auto-detect if this fails
         'type': 'movement'
     },
     'HITACHI_LOCAL': {
-        'path': 'data/HVDC WAREHOUSE_HITACHI(HE_LOCAL).xlsx',
+        'path': 'analyzer/data/HVDC WAREHOUSE_HITACHI(HE_LOCAL).xlsx',
         'sheet_name': 'CASE LIST',
         'type': 'movement'
     },
     'HITACHI_LOT': {
-        'path': 'data/HVDC WAREHOUSE_HITACHI(HE-0214,0252).xlsx',
+        'path': 'analyzer/data/HVDC WAREHOUSE_HITACHI(HE-0214,0252).xlsx',
         'sheet_name': 'CASE LIST',
-        'type': 'movement'
+        'type': 'movement',
+        'engine': 'openpyxl' # Specify engine for potentially problematic files
     },
     'SIEMENS': {
-        'path': 'data/HVDC WAREHOUSE_SIMENSE(SIM).xlsx',
+        'path': 'analyzer/data/HVDC WAREHOUSE_SIMENSE(SIM).xlsx',
         'sheet_name': 'CASE LIST',
         'type': 'movement'
     },
 }
 
+# 3. WAREHOUSE & SITE CONFIGURATION: Defines columns for specific logic
 # =============================================================================
-# 3. WAREHOUSE & SITE DEFINITIONS: Defines location columns by supplier
-# =============================================================================
-# Maps each supplier to their specific warehouse and site location columns.
+# Used to differentiate warehouse movements from final site deliveries.
 
 WAREHOUSE_COLS_MAP = {
-    'HITACHI': [
-        'DSV Outdoor', 'DSV Indoor', 'DSV Al Markaz', 
-        'Hauler Indoor', 'DSV MZP', 'MOSB', 'Shifting'
-    ],
-    'HITACHI_LOCAL': [
-        'DSV Outdoor', 'DSV Al Markaz', 'DSV MZP', 'MOSB'
-    ],
-    'HITACHI_LOT': [
-        'DSV Indoor', 'DHL WH', 'DSV Al Markaz', 'AAA Storage'
-    ],
-    'SIEMENS': [
-        'DSV Outdoor', 'DSV Indoor', 'DSV Al Markaz', 
-        'MOSB', 'AAA Storage', 'Shifting'
-    ],
+    'HITACHI': ['DSV Outdoor', 'DSV Indoor', 'DSV Al Markaz', 'Hauler Indoor', 'DSV MZP', 'MOSB'],
+    'HITACHI_LOCAL': ['DSV Outdoor', 'DSV Al Markaz', 'DSV MZP', 'MOSB'],
+    'HITACHI_LOT': ['DSV Indoor', 'DHL WH', 'DSV Al Markaz', 'AAA Storage'],
+    'SIEMENS': ['DSV Outdoor', 'DSV Indoor', 'DSV Al Markaz', 'MOSB', 'AAA Storage'],
 }
 
-# Site locations (common across all suppliers)
 SITE_COLS = ['DAS', 'MIR', 'SHU', 'AGI']
 
+# 4. ANALYSIS PARAMETERS
 # =============================================================================
-# 4. WAREHOUSE CLASSIFICATION: Categorizes warehouses by type
-# =============================================================================
-# Used for special handling and analysis of different warehouse types.
-
-INDOOR_WAREHOUSES = {
-    'DSV Indoor', 'Hauler Indoor', 'DSV Al Markaz', 
-    'AAA Storage', 'DHL WH'
-}
-
-DANGEROUS_WAREHOUSES = {
-    'AAA Storage'
-}
-
-# =============================================================================
-# 5. ANALYSIS PARAMETERS: Configurable thresholds and settings
-# =============================================================================
-# These parameters control the behavior of various analyses.
-
-DEADSTOCK_DAYS = 90  # Days threshold for deadstock analysis
-
-# =============================================================================
-# 6. OUTPUT CONFIGURATION: Report generation settings
-# =============================================================================
-# Settings for Excel report generation and formatting.
-
-REPORT_CONFIG = {
-    'output_directory': 'outputs',
-    'filename_prefix': 'Inventory_Report',
-    'auto_open': True,  # Whether to automatically open the report after generation
-    'sheet_names': {
-        'full_stock_list': 'Full_Stock_List',
-        'verification': 'Stock_Verification',
-        'deadstock': 'DeadStock_Analysis'
-    }
-}
-
-# =============================================================================
-# 7. VALIDATION RULES: Data quality and business rules
-# =============================================================================
-# Rules for validating data quality and business logic.
-
-VALIDATION_RULES = {
-    'required_columns': ['case_no', 'quantity'],
-    'quantity_min': 0,
-    'quantity_max': 1000000,
-    'dimension_min': 0,
-    'dimension_max': 100,  # meters
-    'weight_min': 0,
-    'weight_max': 100000  # kg
-}
+DEADSTOCK_DAYS = 90
+TARGET_MONTH = "2025-06" # 분석 기준 월

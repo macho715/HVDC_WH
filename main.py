@@ -16,184 +16,46 @@ from analyzer.reporter import ExcelReporter
 import config
 
 
-class WarehouseAnalyzer:
-    """
-    Main orchestrator class that coordinates the entire analysis pipeline.
-    
-    This class follows the Single Responsibility Principle - it only handles
-    workflow coordination, not data processing or calculations.
-    """
-    
-    def __init__(self, file_config: Dict, ontology_map: Dict):
-        """
-        Initialize the analyzer with configuration.
-        
-        Args:
-            file_config: Configuration for data files
-            ontology_map: Ontology mapping for column standardization
-        """
-        self.file_config = file_config
-        self.ontology_map = ontology_map
-        
-        # Initialize components
-        self.normalizer = DataNormalizer(ontology_map)
-        self.calculator = AnalysisCalculator(config.__dict__)
-        
-        # Data storage
-        self.onhand_data = pd.DataFrame()
-        self.movement_data = {}
-    
-    def load_data(self) -> None:
-        """
-        Load and normalize all data files.
-        """
-        print("🔄 Loading and normalizing data...")
-        
-        # Load onhand data (source of truth)
-        self._load_onhand_data()
-        
-        # Load movement data
-        self._load_movement_data()
-        
-        # Set data for calculator
-        self.calculator.set_data(self.onhand_data, self.movement_data)
-        
-        print(f"✅ Data loading complete. OnHand: {len(self.onhand_data)} records, "
-              f"Movement files: {len(self.movement_data)}")
-    
-    def generate_full_stock_list(self) -> pd.DataFrame:
-        """
-        Generate the complete stock list.
-        
-        Returns:
-            DataFrame containing full stock information
-        """
-        return self.calculator.generate_full_stock_list()
-    
-    def run_stock_verification(self, full_stock_list: pd.DataFrame) -> pd.DataFrame:
-        """
-        Run stock verification analysis.
-        
-        Args:
-            full_stock_list: Complete stock list to verify
-            
-        Returns:
-            DataFrame containing verification results
-        """
-        return self.calculator.run_stock_verification(full_stock_list)
-    
-    def run_deadstock_analysis(self, full_stock_list: pd.DataFrame) -> pd.DataFrame:
-        """
-        Run deadstock analysis.
-        
-        Args:
-            full_stock_list: Complete stock list to analyze
-            
-        Returns:
-            DataFrame containing deadstock items
-        """
-        return self.calculator.run_deadstock_analysis(full_stock_list)
-    
-    def _load_onhand_data(self) -> None:
-        """Load and normalize onhand data."""
-        onhand_config = self.file_config.get('STOCK_ONHAND')
-        if not onhand_config:
-            print("⚠️ No STOCK_ONHAND configuration found")
-            return
-        
-        file_path = onhand_config['path']
-        sheet_name = onhand_config['sheet_name']
-        
-        if not os.path.exists(file_path):
-            print(f"⚠️ OnHand file not found: {file_path}")
-            return
-        
-        try:
-            df = pd.read_excel(file_path, sheet_name=sheet_name)
-            normalized_df = self.normalizer.normalize(df, 'STOCK_ONHAND')
-            if normalized_df is not None:
-                self.onhand_data = normalized_df
-        except Exception as e:
-            print(f"❌ Error loading OnHand data: {e}")
-    
-    def _load_movement_data(self) -> None:
-        """Load and normalize movement data from all suppliers."""
-        for file_key, file_config in self.file_config.items():
-            if file_key == 'STOCK_ONHAND':
-                continue  # Skip onhand file as it's handled separately
-            
-            file_path = file_config['path']
-            sheet_name = file_config['sheet_name']
-            
-            if not os.path.exists(file_path):
-                print(f"⚠️ Movement file not found: {file_path}")
-                continue
-            
-            try:
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
-                normalized_df = self.normalizer.normalize(df, file_key)
-                if normalized_df is not None:
-                    self.movement_data[file_key] = normalized_df
-            except Exception as e:
-                print(f"❌ Error loading {file_key} data: {e}")
-
-
 def main():
     """
-    Main pipeline to run the warehouse analysis.
-    
-    This function orchestrates the entire analysis workflow:
-    1. Initialize components
-    2. Load and normalize data
-    3. Run analyses
-    4. Generate reports
+    업로드된 엑셀 스타일과 동일한 Case 단위 월별 집계를 생성하는 메인 파이프라인.
     """
-    print("🚀 Starting Warehouse Analysis Pipeline")
-    print("=" * 50)
+    # 1. 정규화 모듈 초기화
+    normalizer = DataNormalizer(config.ONTOLOGY_MAP)
     
-    # 1. Initialize the analyzer with configurations
-    analyzer = WarehouseAnalyzer(
-        file_config=config.FILE_CONFIG,
-        ontology_map=config.ONTOLOGY_MAP
-    )
+    # 2. 이동 데이터 로드 및 정규화
+    print("🚀 Starting Data Loading and Normalization...")
+    movement_data = {}
+    for key, conf in config.FILE_CONFIG.items():
+        if conf['type'] == 'movement':
+            print(f"   - Loading: {key} ({conf['path']})")
+            try:
+                df = pd.read_excel(conf['path'], sheet_name=conf.get('sheet_name', 'CASE LIST'))
+                normalized_df = normalizer.normalize(df, key)
+                if normalized_df is not None:
+                    movement_data[key] = normalized_df
+            except Exception as e:
+                print(f"   - ⚠️ ERROR reading {key}: {e}")
+                
+    # 3. 계산기 모듈 초기화 및 Case 단위 분석 실행
+    calculator_config = {
+        'WAREHOUSE_COLS_MAP': config.WAREHOUSE_COLS_MAP,
+        'SITE_COLS': config.SITE_COLS,
+        'TARGET_MONTH': config.TARGET_MONTH
+    }
+    calculator = AnalysisCalculator(calculator_config)
+    calculator.set_data(movement_data)
     
-    # 2. Load and normalize all data
-    analyzer.load_data()
-    
-    # 3. Run all analyses
-    reports_to_generate = {}
-    
-    # Run core analyses based on the OnHand report
-    if not analyzer.onhand_data.empty:
-        # Generate the primary stock list
-        full_stock_list = analyzer.generate_full_stock_list()
-        reports_to_generate['Full_Stock_List'] = full_stock_list
-        
-        # Generate the verification report
-        verification_report = analyzer.run_stock_verification(full_stock_list)
-        reports_to_generate['Stock_Verification'] = verification_report
-        
-        # Future analyses can be added here
-        # deadstock_report = analyzer.run_deadstock_analysis(full_stock_list)
-        # reports_to_generate['DeadStock'] = deadstock_report
-        
-    else:
-        print("\n⚠️ Skipping OnHand-based reports because OnHand data is missing.")
-    
-    # 4. Create the Excel report
+    print("\n📈 Generating Supplier-Based Case Analysis Reports...")
+    reports_to_generate = calculator.run_supplier_case_analysis()
+
+    # 4. 생성된 데이터프레임들로 엑셀 리포트 생성
     if reports_to_generate:
+        print(f"\n📊 Generating Excel Report with {len(reports_to_generate)} sheets...")
         reporter = ExcelReporter(reports_to_generate)
-        output_path = reporter.create_report()
-        
-        # Print summary
-        summary = reporter.get_report_summary()
-        print("\n📊 Report Summary:")
-        for sheet_name, row_count in summary.items():
-            print(f"   - {sheet_name}: {row_count} rows")
+        reporter.create_report()
     else:
-        print("\n⚠️ No reports to generate.")
-    
-    print("\n✅ Analysis pipeline complete!")
+        print("\n- ⚠️ WARNING: No reports to generate.")
 
 
 if __name__ == '__main__':

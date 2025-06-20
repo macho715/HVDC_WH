@@ -1,0 +1,12 @@
+---
+description: 최종 산출 엑셀 시트 구조와 각 시트 역할을 명확하게 한 줄 설명 포함
+globs: 
+alwaysApply: false
+---
+├─ Consolidated_Status               # 월별/창고별/공급사별 입고/출고/재고 (수량, 면적, 부피)
+├─ Overall_Supplier_Summary          # 공급사별 전체 집계(총 입고, 출고, 재고, 면적)
+├─ Warehouse_Stock_Summary           # 창고별 누적 입출고 및 재고, 창고분류 포함
+├─ Pivoted_Monthly_Summary           # 분류별(Indoor 등)·월별 피벗(대시보드용)
+├─ DeadStock_Analysis (90+ days)     # 90일 이상 장기재고 (있을 때만 생성)
+└─ **HVDC_Stock_OnHand**             # ★ 업로드한 OnHand 실재고 기준, 케이스별 최신 리스트(추가)
+

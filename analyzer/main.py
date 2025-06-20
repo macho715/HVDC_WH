@@ -1,47 +1,49 @@
 # /main.py
 
+# analyzer 패키지에서 각 클래스를 가져옴
 from analyzer.normalizer import DataNormalizer
 from analyzer.calculator import AnalysisCalculator
 from analyzer.reporter import ExcelReporter
-import config  # Import the configuration file
+# 설정 파일에서 모든 설정을 가져옴
+import config
 
 def main():
     """
-    Main pipeline to run the warehouse analysis.
-    This script orchestrates the loading, analysis, and reporting steps.
+    웨어하우스 분석을 실행하는 메인 파이프라인.
+    이 스크립트는 로딩, 분석, 리포팅 단계를 조율합니다.
     """
-    # 1. Initialize the analyzer with configurations
+    # 1. 설정과 온톨로지를 사용하여 분석기 초기화
     analyzer = WarehouseAnalyzer(
         file_config=config.FILE_CONFIG,
         ontology_map=config.ONTOLOGY_MAP
     )
     
-    # 2. Load and normalize all data
+    # 2. 모든 데이터 파일을 로드하고 표준화
     analyzer.load_data()
 
-    # 3. Run all analyses
-    # This dictionary will hold all the DataFrames for the final report.
+    # 3. 모든 분석 실행
+    # 이 딕셔너리에 최종 보고서에 포함될 모든 데이터프레임이 저장됩니다.
     reports_to_generate = {}
     
-    # Run core analyses based on the OnHand report
+    # OnHand 리포트를 기준으로 핵심 분석 수행
     if not analyzer.onhand_data.empty:
-        # Generate the primary, most accurate stock list
+        # 가장 정확한 최신 재고 리스트 생성
         full_stock_list = analyzer.generate_full_stock_list()
         reports_to_generate['Full_Stock_List'] = full_stock_list
         
-        # Generate the verification report
+        # 재고 검증 리포트 생성
         verification_report = analyzer.run_stock_verification(full_stock_list)
         reports_to_generate['Stock_Verification'] = verification_report
         
-        # Add other analyses here in the future
-        # e.g., deadstock_report = analyzer.run_deadstock_analysis(full_stock_list)
+        # 향후 다른 분석 기능들을 이곳에 추가할 수 있습니다.
+        # 예: deadstock_report = analyzer.run_deadstock_analysis(full_stock_list)
         # reports_to_generate['DeadStock'] = deadstock_report
 
     else:
-        print("\nSkipping OnHand-based reports because OnHand data is missing.")
+        print("\nOnHand 데이터가 없으므로, OnHand 기반 리포트는 건너뜁니다.")
 
 
-    # 4. Create the Excel report from the generated DataFrames
+    # 4. 생성된 데이터프레임들로 엑셀 리포트 생성
     reporter = ExcelReporter(reports_to_generate)
     reporter.create_report()
 
