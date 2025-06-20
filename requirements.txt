@@ -1,0 +1,15 @@
+# Warehouse Analysis System Requirements
+# Core data processing
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Excel file handling
+openpyxl>=3.0.0
+xlsxwriter>=3.0.0
+
+# Data validation and type hints
+typing-extensions>=4.0.0
+
+# Optional: For enhanced data analysis
+# matplotlib>=3.5.0  # For charts and graphs
+# seaborn>=0.11.0    # For statistical visualizations 
